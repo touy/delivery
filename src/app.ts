@@ -2,6 +2,7 @@ import * as moment from 'moment-timezone';
 import * as express from "express";
 // import * as crypto from 'crypto';
 // import * as request from 'request';
+
 import * as Nano from 'nano';
 import * as async from 'async';
 import * as uuidV4 from 'uuid';
@@ -27,6 +28,195 @@ import { NextHandleFunction } from 'connect';
 //import debug = require("debug");
 class App {
     private timeout = ms => new Promise(res => setTimeout(res, ms));
+    initWebsocket(): any {
+        //debug()
+        let parent = this;
+
+        this.ws_client = new WebSocket(this._usermanager_ws); // user-management
+
+        this.wss.on('connection', async (ws, req) => {
+            const ip = req.connection.remoteAddress;
+            console.log('connection from ' + ip);
+            //const ip = req.headers['x-forwarded-for'];
+            ws['isAlive'] = true;
+            ws.binaryType = 'arraybuffer';
+
+            ws['client'] = {};
+            ws['client'].auth = {};
+            ws['gui'] = '';
+            ws['lastupdate'] = moment(moment.now()).toDate();
+            console.log('DECLARE MESSAGE ', ws.readyState);
+            ws.on('message', (data) => {
+                let js: any = {};
+                try {
+                    console.log('comming message');
+                    let b = parent.ab2str(data);
+                    // console.log('1');
+                    //console.log(b);
+                    let s = Buffer.from(b, 'base64').toString();
+                    // console.log('2');
+                    // console.log(s);
+                    js['client'] = JSON.parse(s);
+                    //console.log(js.client)
+                    js['ws'] = ws;
+                    ws['lastupdate'] = moment(moment.now()).toDate();
+                    ws['isAlive'] = true;
+                    ws['gui'] = js['client'].gui;
+                    // this.checkConnection(ws['gui']);
+
+                    js['client'].auth = {};
+                    ws['client'] = JSON.parse(JSON.stringify(js['client']));
+                    console.log('command ', ws['client'].data.command);
+                    parent.commandReader(js).then(res => {
+                        js = res;
+                        ws['gui'] = js['client'].gui;
+                        ws['client'] = JSON.parse(JSON.stringify(js['client']));
+                        ws['lastupdate'] = moment(moment.now()).toDate();
+
+                        if (res['client'].data.command === 'logout') {
+                            ws['gui'] = '';
+                            ws['client'] = {};
+                            ws['lastupdate'] = '';
+                        }
+                        if (parent._system_prefix.indexOf(js['client'].prefix) < 0) {
+                            console.log('clear auth')
+                            delete js['client'].auth;
+                            //parent.filterObject(js['client'].data);
+                        }
+                        console.log('sending');
+                        // console.log(js['client']);
+                        // js['client'].data.message+=' TEST non english ຍັງຈັບສັນຍານ GPS ບໍ່ໄດ້ ເລີຍບໍ່ທັນ ONLINE ແຕ່ໂທໄດ້, ຕັ້ງຄ່າໄດ້ແລ້ວ';
+
+                        // console.log(98);
+                        // console.log(b);
+                        // let a = Buffer.from(b);
+                        // console.log(a);
+                        // console.log(102);
+                        console.log(js.client.data.command);
+                        if (ws.readyState === ws.OPEN) {
+                            let b = Buffer.from(JSON.stringify(js['client'])).toString('base64');
+                            ws.send(JSON.stringify(b), {
+                                binary: true
+                            });
+                        }
+                    }).catch(err => {
+                        js = err;
+                        var l = {
+                            log: js['client'].data.message,
+                            logdate: moment(moment.now()),
+                            type: "error",
+                            gui: uuidV4()
+                        };
+                        //console.log(err);
+                        parent.errorLogging(l);
+                        console.log('ws sending');
+                        ws['client'] = JSON.parse(JSON.stringify(js['client']));
+                        ws['lastupdate'] = moment(moment.now()).toDate();
+                        js['client'].data.message = js['client'].data.message.message;
+                        parent.filterObject(js['client'].auth);
+                        let b = Buffer.from(JSON.stringify(js['client'])).toString('base64');
+                        //console.log(b);
+                        // let a = Buffer.from(b);
+                        //console.log(a);
+                        if (ws.readyState === ws.OPEN) {
+
+                            ws.send(JSON.stringify(b), {
+                                binary: true
+                            });
+                        }
+                    });
+                } catch (error) {
+                    console.log(error);
+                    js['client'].data.message = error.message;
+                    ws['client'] = JSON.parse(JSON.stringify(js['client']));
+                    ws['lastupdate'] = moment(moment.now()).toDate();
+                    parent.filterObject(js['client'].auth);
+                    let b = Buffer.from(JSON.stringify(js['client'])).toString('base64');
+                    //console.log(b);
+                    // let a = Buffer.from(b);
+                    //console.log(a);
+                    if (ws.readyState === ws.OPEN) {
+
+                        ws.send(JSON.stringify(b), {
+                            binary: true
+                        });
+                    }
+                }
+
+            });
+
+            ws.on('pong', () => {
+                try {
+                    ws['isAlive'] = true;
+                    if (!ws['lastupdate'] && !ws['gui']) {
+                        ws['isAlive'] = false;
+                    }
+                    let startDate = moment(ws['lastupdate']).toDate()
+                    let endDate = moment(moment.now());
+                    const timeout = endDate.diff(startDate, 'seconds');
+                    if (timeout > 60 * 15)
+                        ws['isAlive'] = false;
+                    else
+                        ws['isAlive'] = true;
+                    // parent.wss.clients.forEach(element => {
+                    //     let client = element['client'];
+                    //     //parent.setLoginStatus(client);
+                    //     //parent.setClientStatus(client);
+                    //     //this.setOnlineStatus(client);                    
+                    // });
+                } catch (error) {
+                    console.log(error);
+                }
+            });
+            ws.on('error', (err) => {
+                //js.client.data.message=JSON.stringify(err);
+                console.log(err);
+                var l = {
+                    log: err,
+                    logdate: moment().toDate(),
+                    type: "error",
+                    gui: uuidV4()
+                };
+                parent.errorLogging(l);
+            });
+
+        });
+        const interval = setInterval(() => {
+            this.wss.clients.forEach((ws) => {
+                try {
+                    if (ws['isAlive'] === false || !ws['isAlive']) {
+
+                        console.log(ws['isAlive'] + 'TERMINATE ws ' + ws['gui']);
+                        return ws.terminate();
+                    }
+                    console.log('TIME INTERVAL');
+                    ws['isAlive'] = false;
+                    ws.ping(() => { });
+                } catch (error) {
+                    console.log(error);
+                }
+            });
+        }, 60000); // set 60 seconds         
+
+
+    }
+    checkConnection(gui) {
+        let client_count=0;
+        this.wss.clients.forEach((ws) => {
+            try {
+                if (ws['gui'] === gui) {
+                    if(client_count){
+                        return;
+                    }
+                    client_count++;
+                    ws['isAlive'] = true;                    
+                    ws['lastupdate'] = (moment().toDate());
+                }
+            } catch (error) {
+                console.log(error);
+            }
+        });
+    }
     add_latest(deviceinfo) {
         let deferred = Q.defer();
         let db = this.create_db('latest_record');
@@ -308,178 +498,7 @@ class App {
         // this.r_client.set(this._current_system + '_imei_' + client.deviceinfo.imei, JSON.stringify(client));        
         return deferred.promise;
     }
-    initWebsocket(): any {
-        //debug()
-        let parent = this;
-
-        this.ws_client = new WebSocket(this._usermanager_ws); // user-management
-
-        this.wss.on('connection', async (ws, req) => {
-            const ip = req.connection.remoteAddress;
-            console.log('connection from ' + ip);
-            //const ip = req.headers['x-forwarded-for'];
-            ws['isAlive'] = true;
-            ws.binaryType = 'arraybuffer';
-
-            ws['client'] = {};
-            ws['client'].auth = {};
-            ws['gui'] = '';
-            ws['lastupdate'] = moment(moment.now()).toDate();
-            console.log('DECLARE MESSAGE ', ws.readyState);
-            ws.on('message', (data) => {
-                let js: any = {};
-                try {
-                    console.log('comming message');
-                    let b = parent.ab2str(data);
-                    // console.log('1');
-                    //console.log(b);
-                    let s = Buffer.from(b, 'base64').toString();
-                    // console.log('2');
-                    // console.log(s);
-                    js['client'] = JSON.parse(s);
-                    //console.log(js.client)
-                    js['ws'] = ws;
-                    ws['lastupdate'] = moment(moment.now()).toDate();
-                    ws['isAlive'] = true;
-                    ws['gui'] = js['client'].gui;
-                    // this.checkConnection(ws['gui']);
-
-                    js['client'].auth = {};
-                    ws['client'] = JSON.parse(JSON.stringify(js['client']));
-                    console.log('command ', ws['client'].data.command);
-                    parent.commandReader(js).then(res => {
-                        js = res;
-                        ws['gui'] = js['client'].gui;
-                        ws['client'] = JSON.parse(JSON.stringify(js['client']));
-                        ws['lastupdate'] = moment(moment.now()).toDate();
-
-                        if (res['client'].data.command === 'logout') {
-                            ws['gui'] = '';
-                            ws['client'] = {};
-                            ws['lastupdate'] = '';
-                        }
-                        if (parent._system_prefix.indexOf(js['client'].prefix) < 0) {
-                            console.log('clear auth')
-                            delete js['client'].auth;
-                            //parent.filterObject(js['client'].data);
-                        }
-                        console.log('sending');
-                        // console.log(js['client']);
-                        // js['client'].data.message+=' TEST non english ຍັງຈັບສັນຍານ GPS ບໍ່ໄດ້ ເລີຍບໍ່ທັນ ONLINE ແຕ່ໂທໄດ້, ຕັ້ງຄ່າໄດ້ແລ້ວ';
-
-                        // console.log(98);
-                        // console.log(b);
-                        // let a = Buffer.from(b);
-                        // console.log(a);
-                        // console.log(102);
-                        console.log(js.client.data.command);
-                        if (ws.readyState === ws.OPEN) {
-                            let b = Buffer.from(JSON.stringify(js['client'])).toString('base64');
-                            ws.send(JSON.stringify(b), {
-                                binary: true
-                            });
-                        }
-                    }).catch(err => {
-                        js = err;
-                        var l = {
-                            log: js['client'].data.message,
-                            logdate: moment(moment.now()),
-                            type: "error",
-                            gui: uuidV4()
-                        };
-                        //console.log(err);
-                        parent.errorLogging(l);
-                        console.log('ws sending');
-                        ws['client'] = JSON.parse(JSON.stringify(js['client']));
-                        ws['lastupdate'] = moment(moment.now()).toDate();
-                        js['client'].data.message = js['client'].data.message.message;
-                        parent.filterObject(js['client'].auth);
-                        let b = Buffer.from(JSON.stringify(js['client'])).toString('base64');
-                        //console.log(b);
-                        // let a = Buffer.from(b);
-                        //console.log(a);
-                        if (ws.readyState === ws.OPEN) {
-
-                            ws.send(JSON.stringify(b), {
-                                binary: true
-                            });
-                        }
-                    });
-                } catch (error) {
-                    console.log(error);
-                    js['client'].data.message = error.message;
-                    ws['client'] = JSON.parse(JSON.stringify(js['client']));
-                    ws['lastupdate'] = moment(moment.now()).toDate();
-                    parent.filterObject(js['client'].auth);
-                    let b = Buffer.from(JSON.stringify(js['client'])).toString('base64');
-                    //console.log(b);
-                    // let a = Buffer.from(b);
-                    //console.log(a);
-                    if (ws.readyState === ws.OPEN) {
-
-                        ws.send(JSON.stringify(b), {
-                            binary: true
-                        });
-                    }
-                }
-
-            });
-
-            ws.on('pong', () => {
-                try {
-                    ws['isAlive'] = true;
-                    if (!ws['lastupdate'] && !ws['gui']) {
-                        ws['isAlive'] = false;
-                    }
-                    let startDate = moment(ws['lastupdate']).toDate()
-                    let endDate = moment(moment.now());
-                    const timeout = endDate.diff(startDate, 'seconds');
-                    if (timeout > 60 * 15)
-                        ws['isAlive'] = false;
-                    else
-                        ws['isAlive'] = true;
-                    // parent.wss.clients.forEach(element => {
-                    //     let client = element['client'];
-                    //     //parent.setLoginStatus(client);
-                    //     //parent.setClientStatus(client);
-                    //     //this.setOnlineStatus(client);                    
-                    // });
-                } catch (error) {
-                    console.log(error);
-                }
-            });
-            ws.on('error', (err) => {
-                //js.client.data.message=JSON.stringify(err);
-                console.log(err);
-                var l = {
-                    log: err,
-                    logdate: moment().toDate(),
-                    type: "error",
-                    gui: uuidV4()
-                };
-                parent.errorLogging(l);
-            });
-
-        });
-        const interval = setInterval(() => {
-            this.wss.clients.forEach((ws) => {
-                try {
-                    if (ws['isAlive'] === false || !ws['isAlive']) {
-
-                        console.log(ws['isAlive'] + 'TERMINATE ws ' + ws['gui']);
-                        return ws.terminate();
-                    }
-                    console.log('TIME INTERVAL');
-                    ws['isAlive'] = false;
-                    ws.ping(() => { });
-                } catch (error) {
-                    console.log(error);
-                }
-            });
-        }, 60000); // set 60 seconds         
-
-
-    }
+    
     setAutoRefresh(intervaltime = 1000 * 5 * 60) {
         let parent = this;
         const rep_interval = setInterval(async () => {
@@ -496,7 +515,7 @@ class App {
             }
             if (1) {
                 try {
-                    let devices: any = await parent.findDeviceByUsername('ice-maker-admin');
+                    let devices: any = await parent.findDeviceByUsername('delivery-admin');
                     console.log(devices.length);
                     if (devices.length) {
                         let array = devices;
@@ -524,26 +543,8 @@ class App {
 
         }, intervaltime);
     }
-    checkConnection(gui) {
-        let client_count=0;
-        this.wss.clients.forEach((ws) => {
-            try {
-                if (ws['gui'] === gui) {
-                    if(client_count){
-                        return;
-                    }
-                    client_count++;
-                    ws['isAlive'] = true;                    
-                    ws['lastupdate'] = (moment().toDate());
-                }
-            } catch (error) {
-                console.log(error);
-            }
-        });
-    }
-
-
-    private _system_prefix = ['ice-maker', 'gij', 'web-post', 'user-management'];
+    
+    private _system_prefix = ['delivery', 'gij', 'web-post', 'user-management'];
     private ws_client: WebSocket;
     private wsoption: WebSocket.ServerOptions;
     private wss: WebSocket.Server;
@@ -775,7 +776,7 @@ class App {
 
     constructor() {
         this.convertTZ(moment.now());
-        this._current_system = 'ice-maker';
+        this._current_system = 'delivery';
         this._usermanager_host = 'http://nonav.net:6688';
         // this._usermanager_ws = 'ws://nonav.net:6688';
         this._usermanager_ws = 'ws://localhost:6688';
@@ -1108,44 +1109,7 @@ class App {
             console.log(error);
         }
     };
-    cleanWorkingRecord() {
-
-    }
-    cleanParkingRecord() {
-
-    }
-    cleanLatestRecord() {
-
-    }
-    cleanAlarmRecord() { }
-    cleanRaws() {
-
-    }
-    cleanStatus() {
-
-    }
-    cleanDevices() {
-
-    }
-    bakWorkingRecord() {
-
-    }
-    bakParkingRecord() {
-
-    }
-    bakLatestRecord() {
-
-    }
-    bakAlarmRecord() { }
-    bakRaws() {
-
-    }
-    bakStatus() {
-
-    }
-    bakDevices() {
-
-    }
+    
     initDB(): void {
         // init_db('icemaker_device', __design_icemakerdevice);
         this.init_db('icemaker_payment', this.__design_icemakerpayment);
@@ -1203,71 +1167,12 @@ class App {
         //return db;
     }
 
-
-
-
-
-    cleanBillAndPayment() {
-        let deferred = Q.defer();
-        try {
-            let db_payment = this.create_db('icemaker_payment');
-            let db_bill = this.create_db('icemaker_bill');
-            db_payment.list((err, res) => {
-                if (err) { console.log(err); deferred.reject(err) }
-                else {
-                    let arr = [];
-                    for (let index = 0; index < res.rows.length; index++) {
-                        const element = res.rows[index].doc;
-                        if (element._id.indexOf('_design') > -1) {
-                            continue;
-                        }
-                        element._deleted = true;
-                        arr.push(element);
-                    }
-                    db_payment.bulk({
-                        docs: arr
-                    }, (err, res) => {
-                        if (err) { console.log(err); deferred.reject(err); }
-                        else {
-                            db_bill.list((err, res) => {
-                                if (err) { console.log(err); deferred.reject(err); }
-                                else {
-                                    let arr = [];
-                                    for (let index = 0; index < res.rows.length; index++) {
-                                        const element = res.rows[index].doc;
-                                        if (element._id.indexOf('_design') > -1) {
-                                            continue;
-                                        }
-                                        element._deleted = true;
-                                        arr.push(element);
-                                    }
-                                    db_bill.bulk({
-                                        docs: arr
-                                    }, (err, res) => {
-                                        if (err) { console.log(err); deferred.reject(err); }
-                                        else {
-                                            deferred.resolve('OK deleted all');
-                                        }
-                                    });
-                                }
-                            });
-                        }
-                    });
-                }
-            });
-        } catch (error) {
-            deferred.reject(error);
-        }
-
-
-        return deferred.promise;
-    }
     login_ws(js) {
         let deferred = Q.defer();
         let client = JSON.parse(JSON.stringify(js.client));
         client.data.command2 = js.client.data.command;
         client.data.command = 'login';
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         let ws_client = new WebSocket(this._usermanager_ws); // user-management
         ws_client.binaryType = 'arraybuffer';
         let parent = this;
@@ -1332,7 +1237,7 @@ class App {
         //console.log(client);
         client.data.command2 = client.data.command;
         client.data.command = 'get-user-list';
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         let ws_client = new WebSocket(this._usermanager_ws); // user-management
         ws_client.binaryType = 'arraybuffer';
         let parent = this;
@@ -1393,7 +1298,7 @@ class App {
         let client = JSON.parse(JSON.stringify(js.client));
         client.data.command2 = client.data.command;
         client.data.command = 'reset-password-sub-user';
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         let ws_client = new WebSocket(this._usermanager_ws); // user-management
         ws_client.binaryType = 'arraybuffer';
         let parent = this;
@@ -1448,7 +1353,7 @@ class App {
         let client = JSON.parse(JSON.stringify(js.client));
         client.data.command2 = client.data.command;
         client.data.command = 'update-sub-userinfo';
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         let ws_client = new WebSocket(this._usermanager_ws); // user-management
         ws_client.binaryType = 'arraybuffer';
         let parent = this;
@@ -1523,7 +1428,7 @@ class App {
             // console.log(client);
             client.data.command = 'add-sub-user';
             client.data.command2 = js.client.data.command
-            client.prefix = 'ice-maker';
+            client.prefix = 'delivery';
             let ws_client = new WebSocket(this._usermanager_ws); // user-management
             ws_client.binaryType = 'arraybuffer';
             let parent = this;
@@ -1587,9 +1492,9 @@ class App {
                         let gui = js.client.auth.gui;
                         js.client.data.user = user;
                         js.client.data.user.gui = uuidV4();
-                        js.client.data.user.parents = ['ice-maker-admin'];
+                        js.client.data.user.parents = ['delivery-admin'];
                         js.client.data.user.roles = ['user', 'finance'];
-                        js.client.data.user.system = ['ice-maker'];
+                        js.client.data.user.system = ['delivery'];
                         // js.client.data.user.system.push('default');
                         // js.client.data.user.system.push('gij');
                         js.client.data.user.createddate = (moment().format()),
@@ -1637,9 +1542,9 @@ class App {
                             let gui = js.client.auth.gui;
                             js.client.data.user = user;
                             js.client.data.user.gui = uuidV4();
-                            js.client.data.user.parents = ['ice-maker-admin'];
+                            js.client.data.user.parents = ['delivery-admin'];
                             js.client.data.user.roles = ['user'];
-                            js.client.data.user.system = ['ice-maker'];
+                            js.client.data.user.system = ['delivery'];
                             // js.client.data.user.system.push('default');
                             // js.client.data.user.system.push('gij');
                             js.client.data.user.createddate = (moment().format()),
@@ -1689,9 +1594,9 @@ class App {
                         let gui = js.client.auth.gui;
                         js.client.data.user = user;
                         js.client.data.user.gui = uuidV4();
-                        js.client.data.user.parents = ['ice-maker-admin'];
+                        js.client.data.user.parents = ['delivery-admin'];
                         js.client.data.user.roles = ['user', 'sale'];
-                        js.client.data.user.system = ['ice-maker'];
+                        js.client.data.user.system = ['delivery'];
                         // js.client.data.user.system.push('default');
                         // js.client.data.user.system.push('gij');
                         js.client.data.user.createddate = (moment().format()),
@@ -1714,694 +1619,8 @@ class App {
         return deferred.promise;
     }
 
-
-
-    bulkRestoreParking(arr) {
-        let deferred = Q.defer();
-        let db = this.create_db('parking_record');
-        db.bulk({ docs: arr }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            }
-            else {
-                // console.log(arr.length);
-                deferred.resolve(res);
-            }
-        });
-        return deferred.promise;
-    }
-    insertRestoreParking(arr) {
-        let deferred = Q.defer();
-        let db = this.create_db('parking_record');
-        db.insert(arr, arr._id, (err, res) => {
-            if (err) deferred.reject(err);
-            else {
-                console.log(arr.length);
-                deferred.resolve(res);
-            }
-        });
-        return deferred.promise;
-    }
-    async updateParkingDoc(arr) {
-        let deferred = Q.defer();
-        let db = this.create_db('parking_record');
-        db.bulk({ docs: arr }, (err, res) => {
-            if (err) {
-                console.log('bulk delete error');
-                //console.log(err);
-                deferred.reject(err);
-            } else {
-                console.log('bulk delete success');
-                //console.log(res);
-                deferred.resolve('OK');
-            }
-        });
-        return deferred.promise;
-    }
-    async deleteAllParkingDoc() {
-        let deferred = Q.defer();
-        let dbname = 'parking_record';
-        let db = this.create_db(dbname);
-        console.log('destroy ' + dbname);
-        let parent = this;
-        this.nano.db.create(dbname, function (err, body) {
-            if (err) {
-                parent.nano.db.destroy(dbname, function (err, body) {
-                    // create a new database
-                    if (err) {
-                        console.log(err);
-                        deferred.reject(err);
-                    }
-                    else {
-                        parent.nano.db.create(dbname, function (err, body) {
-                            if (err) {
-                                console.log(err);
-                                deferred.reject(err);
-                            }
-                            else {
-                                parent.init_db(dbname, parent.__design_parking);
-                                deferred.resolve('OK recreate parking record')
-                            }
-
-                        });
-                    }
-
-                });
-            } else {
-                parent.nano.db.create(dbname, function (err, body) {
-                    if (err) {
-                        console.log(err);
-                        parent.init_db(dbname, parent.__design_parking);
-                        deferred.reject(err);
-                    }
-                    else {
-                        parent.init_db(dbname, parent.__design_parking);
-                        deferred.resolve('OK recreate ' + dbname)
-                    }
-
-                });
-            }
-        });
-
-        return deferred.promise;
-    }
-    async restoreParkingBackupFile() {
-        console.log('restoring parking');
-        // let fname = __dirname + '../../../../ice_maker_parking_record.txt/ice_maker_parking_record.txt';
-        let fname = path.resolve(__dirname, "../../../ice_maker_parking_record.txt/ice_maker_parking_record.txt");
-        try {
-            let arr = fs.readFileSync(fname).toString().split(/\n/);
-            let ar = [];
-            let count = 0;
-            for (let index = 0; index < arr.length; index++) {
-                if (typeof arr[index] == "undefined" || !arr[index]) {
-                    // NOOP
-                } else {
-                    const element = JSON.parse(arr[index]);
-                    for (let i = 0; i < element.length; i++) {
-                        const e = element[i];
-                        delete e._revisions;
-                        delete e._rev;
-                        // e.gui = e._id;
-                        // e._id = e._id;
-                        ar.push(e);
-                    }
-                    console.log(`parking ${index}/${arr.length}(${ar.length}) - ${count += ar.length}`);
-                }
-                if (ar.length >= 10 * 1000 || index + 1 >= arr.length) {
-                    await this.bulkRestoreParking(ar);
-                    console.log(` parking inserted: +${ar.length} total:${count}`);
-                    ar.length = 0
-                }
-
-            }
-            console.log('done restore parking');
-            // console.log(ar.length);
-            // await this.bulkRestoreWorking(ar);
-        } catch (error) {
-            console.log(error);
-        }
-    }
-    bulkRestoreRaws(arr) {
-        let deferred = Q.defer();
-        let db = this.create_db('raws');
-        console.log('beofre bulk restore raws');
-        db.bulk({ docs: arr }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            }
-            else {
-                console.log(arr.length);
-                deferred.resolve(res);
-            }
-        });
-        return deferred.promise;
-    }
-    bulkRestoreWorking(arr) {
-        let deferred = Q.defer();
-        let db = this.create_db('working_record');
-        db.bulk({ docs: arr }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            }
-            else {
-                console.log(arr.length);
-                deferred.resolve(res);
-            }
-        });
-        return deferred.promise;
-    }
-    insertRestoreWorking(arr) {
-        let deferred = Q.defer();
-        let db = this.create_db('working_record');
-        db.insert(arr, arr._id, (err, res) => {
-            if (err) deferred.reject(err);
-            else {
-                console.log(arr.length);
-                deferred.resolve(res);
-            }
-        });
-        return deferred.promise;
-    }
-    updateWorkingDoc(arr) {
-        let deferred = Q.defer();
-        let db = this.create_db('working_record');
-        db.bulk({ docs: arr }, (err, res) => {
-            if (err) {
-                console.log('bulk delete error');
-                //console.log(err);
-                deferred.reject(err);
-            } else {
-                console.log('bulk delete success');
-                //console.log(res);
-                deferred.resolve('OK');
-            }
-        });
-        return deferred.promise;
-    }
-    deleteAllWorkingDoc() {
-        let deferred = Q.defer();
-        let dbname = 'working_record';
-        let db = this.create_db(dbname);
-        console.log('destroy ' + dbname);
-        let parent = this;
-        this.nano.db.create(dbname, function (err, body) {
-            if (err) {
-                parent.nano.db.destroy(dbname, function (err, body) {
-                    // create a new database
-                    if (err) {
-                        console.log(err);
-                        deferred.reject(err);
-                    }
-                    else {
-                        parent.nano.db.create(dbname, function (err, body) {
-                            if (err) {
-                                console.log(err);
-                                deferred.reject(err);
-                            }
-                            else {
-                                parent.init_db(dbname, parent.__design_working);
-                                deferred.resolve('OK recreate working record')
-                            }
-
-                        });
-                    }
-
-                });
-            } else {
-                parent.nano.db.create(dbname, function (err, body) {
-                    if (err) {
-                        console.log(err);
-                        parent.init_db(dbname, parent.__design_working);
-                        deferred.reject(err);
-                    }
-                    else {
-                        parent.init_db(dbname, parent.__design_working);
-                        deferred.resolve('OK recreate ' + dbname)
-                    }
-
-                });
-            }
-        });
-        // db.list({ include_docs: true, limit: 100 }, async (err, body) => {
-        //     if (err) console.log(err);
-        //     if (!err) {
-        //         let array = body.rows;
-        //         let arr = [];
-        //         let c = 0;
-        //         console.log('fetching');
-        //         for (let index = 0; index < array.length; index++) {
-        //             const element = array[index];
-        //             //console.log(element);
-        //             if (element.id.indexOf('_design/objectList') > -1) {
-
-        //             }
-        //             else {
-        //                 element.doc._deleted = true;
-        //                 arr.push(element.doc);
-        //             }
-        //         }
-        //         await this.updateWorkingDoc(arr);
-        //         //console.log(array[0]);
-        //         deferred.resolve('OK DELETE WORKING');
-        //     } else
-        //         console.log(err);
-        //     deferred.reject(err);
-        // });
-
-        return deferred.promise;
-    }
-    backupDB() {
-        let deferred = Q.defer();
-        let db = this.create_db('working_record');
-        db.list({}, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                console.log(res.rows.length);
-                let arr = [];
-                for (let index = 0; index < res.rows.length; index++) {
-                    const element = res.rows[index].doc;
-                    arr.push(element);
-                }
-                fs.writeFile('working_record.json', JSON.stringify(arr), { encoding: 'utf8', }, err => {
-                    if (err) {
-                        console.log(err);
-                    }
-                });
-            }
-        });
-
-    }
-    readBackUp() {
-        fs.readFile('working_record.json', 'utf8', async function readFileCallback(err, data) {
-            if (err) {
-                console.log(err);
-            } else {
-                let obj = JSON.parse(data); //now it an object
-                let arr = [];
-                for (let index = 0; index < obj.length; index++) {
-                    const element = obj[index];
-                    arr.push(element);
-                    if (arr.length >= 10 * 1000 || index + 1 >= arr.length) {
-                        await this.bulkRestoreWorking(arr);
-                        console.log(`working inserted: +${index} total:${arr.length}`);
-                        arr.length = 0;
-                    }
-                }
-            }
-        });
-    }
-    async restoreRawRecord() {
-        console.log('Raws restoring');
-        let c_db = 'raws';
-        // let fname = __dirname + '../../../../ice_maker_raws.txt/ice_maker_raws.txt';
-        let fname = path.resolve(__dirname, "../../../ice_maker_raws.txt/ice_maker_raws.txt");
-        try {
-            let arr = fs.readFileSync(fname).toString().split(/\n/);
-            let ar = [];
-            let count = 0;
-            let total_fix = 0;
-            for (let index = 0; index < arr.length; index++) {
-                if (typeof arr[index] == "undefined" || !arr[index]) {
-                    // NOOP
-                } else {
-                    const element = JSON.parse(arr[index]);
-                    for (let i = 0; i < element.length; i++) {
-                        const e = element[i];
-                        delete e._rev;
-                        delete e._revisions;
-                        if (e.data)
-                            ar.push(e);
-                    }
-                    console.log(`raws ${index}/${arr.length}(${ar.length}) - ${count += ar.length}`);
-
-                }
-                if (ar.length >= 10000 || index + 1 >= arr.length) {
-                    let array = await this.checkBy_IDs(this.get_IDs(ar), c_db) as any;
-                    console.log('after chec ID ' + array.length)
-                    for (let index = 0; index < ar.length; index++) {
-                        const element = ar[index];
-                        if (array.indexOf(element._id) < 0) {
-                            ar.splice(index, 1);
-                        }
-                    }
-                    console.log(ar[0]);
-                    await this.bulkRestoreRaws(ar);
-                    console.log(`raws inserted: +${ar.length} total:${count}`);
-                    ar.length = 0
-                }
-
-            }
-            console.log('done restore raws');
-            // console.log(ar.length);
-            // await this.bulkRestoreWorking(ar);
-        } catch (error) {
-            console.log(error);
-        }
-
-    }
-    async restoreWorkingRecord() {
-        console.log('working restoring');
-        let c_db = 'working_record';
-        //let fname = '../../../../ice_maker_working_record.txt/ice_maker_working_record.txt';
-        let fname = path.resolve(__dirname, "../../../ice_maker_working_record.txt/ice_maker_working_record.txt");
-        //let fname = 'E:\\icemaker\\ice_maker_working_record.txt\\ice_maker_working_record.txt';
-        try {
-            let arr = fs.readFileSync(fname).toString().split(/\n/);
-            let ar = [];
-            let count = 0;
-            let total_fix = 0;
-            for (let index = 0; index < arr.length; index++) {
-                if (typeof arr[index] == "undefined" || !arr[index]) {
-                    // NOOP
-                } else {
-                    const element = JSON.parse(arr[index]);
-                    for (let i = 0; i < element.length; i++) {
-                        const e = element[i];
-                        if (e['docs']) {
-                            //console.log(e['docs'].length);
-                            // console.log('found in docs ' + e.docs.length);
-                            for (let i = 0; i < e.docs.length; i++) {
-                                const x = e.docs[i];
-                                delete x._revisions;
-                                delete x._rev;
-                                total_fix++;
-                                // e._id ? x.gui = e._id : e._id = x.gui;
-                                // x._id = x.gui;
-                                if ((x.gpstime + '').indexOf('+07:00') > -1) {
-                                    x.gpstime = (x.gpstime + '').replace('+07:00', '');
-                                    x.servertime = (x.servertime + '').replace('+07:00', '');
-                                    // let clone_x=JSON.parse(JSON.stringify(x));
-                                    // clone_x.gui=uuidV4();
-                                    // clone_x._id=x.gui;
-                                    // ar.push(x);
-                                    // x._deleted=true;
-                                }
-                                ar.push(x);
-                            }
-                            // await function(){ return new Promise(resolve => setTimeout(resolve, 1000));};
-                        } else {
-                            delete e._revisions;
-                            delete e._rev;
-                            // e.gui = e._id;
-                            // e._id = e._id;
-                            if ((e.gpstime + '').indexOf('+07:00') > -1) {
-                                e.gpstime = (e.gpstime + '').replace('+07:00', '');
-                                e.servertime = (e.servertime + '').replace('+07:00', '');
-                            }
-                            ar.push(e);
-                        }
-
-                    }
-                    console.log(`working ${index}/${arr.length}(${ar.length}) - ${count += ar.length}`);
-                    console.log('total fix ' + total_fix);
-                }
-                if (ar.length >= 10 * 1000 || index + 1 >= arr.length) {
-                    // let array = await this.checkBy_IDs(this.get_IDs(ar), c_db) as any;
-                    // for (let index = 0; index < ar.length; index++) {
-                    //     const element = ar[index];
-                    //     if (array.indexOf(element._id) < 0) {
-                    //         ar.splice(index, 1);
-                    //     }
-                    // }
-                    await this.bulkRestoreWorking(ar);
-                    console.log(`working inserted: +${ar.length} total:${count}`);
-                    ar.length = 0
-                }
-
-            }
-            console.log('done restore working');
-            // console.log(ar.length);
-            // await this.bulkRestoreWorking(ar);
-        } catch (error) {
-            console.log(error);
-        }
-
-    }
-
-    async restoreWorkingBackupFile() {
-        console.log('working restoring');
-        let c_db = 'working_record';
-        // let fname = __dirname + '../../../../ice_maker_working_record.txt/ice_maker_working_record.txt';
-        let fname = path.resolve(__dirname, "../../../ice_maker_working_record.txt/ice_maker_working_record.txt");
-        try {
-            let arr = fs.readFileSync(fname).toString().split(/\n/);
-            let ar = [];
-            let count = 0;
-            let total_fix = 0;
-            for (let index = 0; index < arr.length; index++) {
-                if (typeof arr[index] == "undefined" || !arr[index]) {
-                    // NOOP
-                } else {
-                    const element = JSON.parse(arr[index]);
-                    for (let i = 0; i < element.length; i++) {
-                        const e = element[i];
-
-                        delete e._revisions;
-                        delete e._rev;
-                        // e.gui = e._id;
-                        // e._id = e._id;
-                        ar.push(e);
-                    }
-                    console.log(`working ${index}/${arr.length}(${ar.length}) - ${count += ar.length}`);
-                    console.log('total fix ' + total_fix);
-                }
-                if (ar.length >= 10 * 1000 || index + 1 >= arr.length) {
-                    await this.bulkRestoreWorking(ar);
-                    console.log(`working inserted: +${ar.length} total:${count}`);
-                    ar.length = 0
-                }
-
-            }
-            console.log('done restore working');
-            // console.log(ar.length);
-            // await this.bulkRestoreWorking(ar);
-        } catch (error) {
-            console.log(error);
-        }
-
-    }
-    getRecordCount(dbname) {
-        let deferred = Q.defer();
-        let db = this.create_db(dbname);
-        db.list({ limit: 0 }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err)
-            } else {
-                deferred.resolve(res.total_rows);
-            }
-        });
-        return deferred.promise;
-    }
-    getRecordList(dbname, page, maxpage) {
-        let deferred = Q.defer();
-        let db = this.create_db(dbname);
-        console.log('paging: ', dbname, page, maxpage);
-        db.list({ limit: maxpage, skip: page, include_docs: true }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err)
-            } else {
-                let arr = [];
-                let array = res.rows;
-                for (let index = 0; index < array.length; index++) {
-                    const element = array[index].doc;
-                    // console.log(element);
-                    if (element.docs) {
-                        element.docs[0]._id = element._id;
-                        element.docs[0].gui = element._id
-                        element.docs[0]._rev = element._rev;
-                        // element=JSON.parse(JSON.stringify(element.docs[0]));
-                        arr.push(element.docs[0]);
-                    } else {
-                        arr.push(element);
-                    }
-
-                }
-                deferred.resolve(arr);
-            }
-        })
-        return deferred.promise;
-    }
-    updateBulkDoc(arr, dbname) {
-        let deferred = Q.defer();
-        let db = this.create_db(dbname);
-        console.log('updating');
-
-        db.bulk({ docs: arr }, (err, res) => {
-            if (err) {
-                //console.log('bulk update error');
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                console.log(res);
-                console.log('bulk update success');
-                //console.log(res);
-                deferred.resolve(res);
-            }
-        });
-        return deferred.promise;
-    }
-    getBy_ID(_id, dbname) {
-        let deferred = Q.defer();
-        let db = this.create_db(dbname);
-        console.log('getting');
-        // console.log(arr);
-        db.get(_id, (err, res) => {
-            if (err) {
-                //console.log('bulk update error');
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                //console.log(res);
-                //console.log(`get: ${res}`);
-                //console.log(res);
-                deferred.resolve(res);
-            }
-        });
-        return deferred.promise;
-    }
-    get_IDs(array) {
-        let ids = [];
-        for (let index = 0; index < array.length; index++) {
-            const element = array[index];
-            ids.push(element._id);
-        }
-        return ids;
-    }
-    checkBy_IDs(_id, dbname) {
-        let deferred = Q.defer();
-        let db = this.create_db(dbname);
-        console.log('getting');
-        if (!Array.isArray(_id)) {
-            _id = [_id];
-        }
-        // console.log(arr);
-        db.fetch({ keys: _id }, (err, res) => {
-            if (err) {
-                //console.log('bulk update error');
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                //console.log(res);
-                //console.log(`get: ${res.rows}`);
-                //console.log(res);
-                let arr = [];
-                for (let index = 0; index < res.rows.length; index++) {
-                    const element = res.rows[index].id;
-                    if (element)
-                        arr.push(element);
-                }
-
-                deferred.resolve(arr);
-            }
-        });
-        // db.view(this.__design_view, 'by_id', { keys: [_id] }, (err, res) => {
-        //     if (err) {
-        //         //console.log('bulk update error');
-        //         console.log(err);
-        //         deferred.reject(err);
-        //     } else {
-        //         //console.log(res);
-        //         //console.log(`get: ${res.rows}`);
-        //         //console.log(res);
-        //         let arr = [];
-        //         for (let index = 0; index < res.rows.length; index++) {
-        //             const element = res.rows[index].id;
-        //             arr.push(element);
-        //         }
-        //         deferred.resolve(arr);
-        //     }
-        // });
-        return deferred.promise;
-    }
-    getRawGen(page, maxpage) {
-        let deferred = Q.defer();
-        let db = this.create_db('raws_gen');
-        console.log('listing');
-        db.list({ limit: maxpage, skip: page, include_docs: true }, async (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                let arr = [];
-                let empty_arr = [];
-                for (let index = 0; index < res.rows.length; index++) {
-                    const element = res.rows[index];
-                    if (element.doc)
-                        arr.push(element.doc);
-
-                }
-                if (empty_arr.length) {
-                    console.log('DELETE BULK DOC RAWS');
-                    await this.updateBulkDoc(empty_arr, 'raws');
-                }
-                deferred.resolve(arr);
-            }
-        });
-        return deferred.promise;
-    }
-    getRawGenCount() {
-        let deferred = Q.defer();
-        let db = this.create_db('raws_gen');
-        db.list({ limit: 0 }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                deferred.resolve(res.total_rows);
-            }
-        });
-        return deferred.promise;
-    }
-    getRawCount() {
-        let deferred = Q.defer();
-        let db = this.create_db('raws');
-        db.list({ limit: 0 }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                deferred.resolve(res.total_rows);
-            }
-        });
-        return deferred.promise;
-    }
-    getRaws(page, maxpage) {
-        let deferred = Q.defer();
-        let db = this.create_db('raws');
-        console.log('listing');
-        db.list({ limit: maxpage, skip: page, include_docs: true }, async (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                let arr = [];
-                let empty_arr = [];
-                for (let index = 0; index < res.rows.length; index++) {
-                    const element = res.rows[index];
-                    if (element.doc.data)
-                        arr.push(element.doc.data);
-                    else {
-                        element.doc._deleted = true;
-                        empty_arr.push(element.doc);
-                    }
-                }
-                if (empty_arr.length) {
-                    console.log('DELETE BULK DOC RAWS');
-                    await this.updateBulkDoc(empty_arr, 'raws');
-                }
-                deferred.resolve(arr);
-            }
-        });
-        return deferred.promise;
-    }
+    
+    
     floatval(mixedVar) {
         //  discuss at: http://locutus.io/php/floatval/
         // original by: Michael White (http://getsprink.com)
@@ -2513,692 +1732,6 @@ class App {
         let parsedDate = Date.parse(date);
         return (isNaN(date) && !isNaN(parsedDate));
     }
-    rawToJson(raw) {
-        //data='(027029926607BR00180213A1759.4902N10237.1968E000.0063422000.0000000001L00000000)'; 
-        let array = raw;
-        let d = [];
-        let jsd: any = [];
-        for (let index = 0; index < array.length; index++) {
-            const rawdata = array[index];
-            if (!rawdata) continue;
-            //console.log('RAW TO JSON');
-            //  console.log(data);
-
-            try {
-                let _response = "COMM";
-                let _G = 0;
-                let _ACC = 0;
-                let _isLatest = 0;
-                let _gpioStr = '';
-                let working_data = [];
-                let parking_data = [];
-                let alarm_data = [];
-                let latest_data = [];
-                if (rawdata == '') {
-                    continue
-                }
-                if (rawdata.length < 13) {
-                    continue;
-                }
-                //console.log("count data:" + data.split(')').length);
-                let dx = [];
-                rawdata.split(')').forEach(element => {
-                    dx.push(element + ")");
-                });
-                for (let index = 0; index < dx.length; index++) {
-                    _response += ' ';
-                    let data = dx[index];
-                    // console.log('==>'+data);
-                    if (data.length < 13)
-                        break;
-                    let _msgType = data.substring(13, 13 + 4);
-                    let _device = data.substring(1, 1 + 12);
-                    let _eventCode = '';
-                    // console.log(_msgType);
-                    // console.log(_device);
-                    if (_msgType == "BP00") //Shake hand and need to response
-                    {
-                        continue;
-                    } else if (_msgType == "BP05" || _msgType == "BR03") { //login message need to response
-                        continue;
-                    } else if (_msgType == "BS08") { //get response continue message sending data from tracker only 
-                        _isLatest = 1;
-                    } else if (_msgType == "BO01") {
-                        _eventCode = data.substring(17, 17 + 1); //s.substring(17,18);
-                        //_response=sprintf("%sAS01%s",_device,_r);
-
-                        _G = 18;
-
-                        _response = util.format("%sAS01%s", _device, 0) + ' ';
-                        _isLatest = 1;
-                    } else if (_msgType == "BP04") { // Answer to Message of calling the roll.
-                        _G = 17;
-                        _isLatest = 1;
-                    } else if (_msgType == "AP19") {
-                        continue;
-                    } else if (_msgType == "BR00" || _msgType.indexOf("BZ00") == 0) { //message of tracker sent by specific interval by user
-
-                        if (_msgType == "BR00") {
-                            _G = 17;
-                            if (data.length < _G + 45 + 8) {
-                                //console.log(data);
-                                data = data.slice(0, data.lastIndexOf(')'));
-                                data += "0000L00000000)";
-                                //console.log(data);
-                            }
-                        } else { //when no GPS which handle later 
-                            _response = "" + _device + "BZ00 ";
-                        }
-                        _isLatest = 1;
-                    } else if (_msgType == "BP12") { // Response to set up vehicle max and min speed
-
-                        _isLatest = 1;
-                    } else if (_msgType == "BV00") { //Response to circuit Control
-                        continue;
-                    } else if (_msgType == "BV01") { //Response to oil Control
-                        continue;
-                    } else if (_msgType == "BR01" || _msgType == "BZ01") {
-                        if (_msgType == "BR01") {
-                            _G = 17;
-                            if (data.length < _G + 45 + 8) {
-                                //console.log(data);
-                                data = data.slice(0, data.lastIndexOf(')'));
-                                data += "0000L00000000)";
-                                //console.log(data);
-                            }
-                        } else {
-                            //when no GPS which handle later , handle later
-                            _response = util.format(" %sBZ01", _device) + ' ';
-                            //writeLog("OK _response _device _ACC /_input");
-                            //die(sprintf(" OK %s", _response));
-                        }
-                        _isLatest = 0;
-                    } else {
-                        //writeLog("OK _response _device _ACC /_input");
-                        //die(sprintf(" OK %s", _arr_input_data[_iLoop]));
-                        continue;
-                    }
-                    // if(data.length<_G + 45){
-                    // continue;}
-                    // if(data.length<_G + 45+8){
-                    //     _gpioStr = data.substring(_G + 45, _G + 45 + 4)
-                    // }else{
-
-                    // }
-                    _gpioStr = data.substring(_G + 45, _G + 45 + 8);
-                    if (_msgType.indexOf('BZ0') == 0) {
-                        let arr = data.split(',');
-                        _gpioStr = arr[arr.length - 1];
-                    }
-                    let status: any = {};
-                    //status.gui=uuidV4();
-                    //status.imei = _device;
-                    //status.messagetype = _msgType;
-                    status.eventcode = _eventCode;
-                    status.voltage = 0;
-                    //status.gpsvalidity='V';
-                    status.input = [];
-                    status.output = [];
-                    status.custom = {};
-                    status.runtime = 0;
-                    //status.speed=0;
-                    //status.odometer=0;
-                    status.gpsvalue = 0;
-                    status.gsmvalue = 0;
-                    if (_gpioStr.length >= 8) {
-                        //10000000 
-                        let _gpioStrArr = _gpioStr.split('');
-                        status.mainpower = _gpioStrArr[0]; //old style start from 1 05092016
-                        // Writelog(_MainPower +' '+ _gpioStr +' '+ _device +' '+ _gpioStrArr[2]);            
-                        status.acc = _gpioStrArr[1];
-                        status.ignition = (status.acc == "1") ? 'ON' : 'OFF';
-
-
-                        status.blender = _gpioStrArr[2];
-                        status.emptyheavy = _gpioStrArr[3];
-                        status.frontdoor = _gpioStrArr[4];
-                        status.backdoor = _gpioStrArr[5]; //off the oil ?
-                        status.offtheoil = _gpioStrArr[5];
-                        status.putback = _gpioStrArr[6]; //arm disarm
-                        status.disarm = _gpioStrArr[6]; //arm disarm
-                        status.vibration = _gpioStrArr[7]; //vibration
-
-                    }
-                    var deviceinfo: any = {
-                        gui: uuidV4(),
-                        imei: _device,
-                        protocol: 'keson',
-                        messagetype: _msgType,
-                        gpsvalidity: "V",
-                        gpstime: '',
-                        servertime: (moment().format()),
-                        lat: 0,
-                        lon: 0,
-                        alt: 0,
-                        speed: 0,
-                        heading: 0,
-                        alarmtype: '',
-                        odometer: 0,
-                        odometerunit: '',
-                        runtime: 0,
-                        //speed: 0,
-                        statuscode: [],
-                        status: {},
-                        islatest: _isLatest
-                    };
-                    deviceinfo._id = deviceinfo.gui;
-                    var [_year, _month, _date] = this.str_split(data.substring(_G + 0, _G + 0 + 6), 2);
-                    var [_hour, _minute, _second] = this.str_split(data.substring(_G + 33, _G + 33 + 6), 2);
-
-
-                    deviceinfo.gpstime = moment.utc(util.format("20%s-%s-%s %s:%s:%s", _year, _month, _date, _hour, _minute, _second), 'YYYY-MM-DD HH:mm:ss');
-                    // deviceinfo.gpstime =new Date(20+_year,_month,_date,_hour,_minute,_second);
-                    // console.log('gpstime: '+deviceinfo.gpstime);
-                    // deviceinfo.gpstime = (deviceinfo.gpstime);
-                    deviceinfo.gpstime = this.convertTZ(deviceinfo.gpstime);
-                    if (!this.isDate(deviceinfo.gpstime.toString())) {
-                        // console.log(deviceinfo.gpstime);
-                        //console.log('Ignore wrong time');
-                        continue;
-                    }
-
-                    //console.log('+7 gpstime:'+deviceinfo.gpstime);
-                    if (_msgType.indexOf('BZ0') == 0)
-                        deviceinfo.gpstime = (moment().format());
-                    //console.log('gpstime '+deviceinfo.gpstime);  
-                    let _secondsDiff = moment(deviceinfo.servertime, "YYYY-MM-DD HH:mm:ss").diff(moment(deviceinfo.gpstime, "YYYY-MM-DD HH:mm:ss"));
-
-                    // console.log(deviceinfo.gpstime);
-                    //console.log(deviceinfo.servertime);
-                    //console.log('second diff: '+_secondsDiff);
-                    if (_secondsDiff < 0)
-                        deviceinfo.gpstime = deviceinfo.servertime;
-
-                    // console.log('gpstime:'+deviceinfo.gpstime);
-
-                    if (_msgType.indexOf('BZ0') != 0) {
-                        deviceinfo.gpsvalidity = data.substring(_G + 6, _G + 6 + 1);
-                        deviceinfo.lat = this.deg_to_decimal(data.substring(_G + 7, _G + 7 + 10));
-                        // console.log(deviceinfo.lat);
-                        //(013632891762 BP050 00013632891762130918 A 2217.7724N0 7047.1436E 000.0 130023 297.45 00000000 L 00000000)
-                        //(027029926607 BR00 180213 A 1759.4857N 10237.2001E 000.0 200354 000.00 00000000 L 00000000)
-                        //(027029926607 BR00 180509 A 1759.4896N 10237.2006E 000.0 134224 000.00 0100)
-                        //(027029657210 BR01 180513 A 1759.9117N 10235.5718E 002.6 085514 002.94 00000000 L 00000000)
-                        //(027029926607 BR00 180509 A 1759.4896N 10237.2006E 000.0 134224 000.00 01000000 L 00000000)
-                        deviceinfo.lon = this.deg_to_decimal(data.substring(_G + 17, _G + 17 + 11));
-                        deviceinfo.speed = data.substring(_G + 28, _G + 28 + 5);
-                        //deviceinfo._timeStr = data.substring( _G + 33,_G+33+ 6);
-                        //put ignition here 
-                        deviceinfo.heading = data.substring(_G + 39, _G + 39 + 6);
-                        deviceinfo.odometerunit = data.substring(_G + 53, _G + 53 + 1);
-                        deviceinfo.odometer = this.hexdec(data.substring(_G + 54, _G + 54 + 8));
-                        //deviceinfo.eventcode .length=0;
-                        //deviceinfo.eventcode.push(_eventCode);
-                        if (deviceinfo.odometer > 0) {
-                            deviceinfo.odometer = (deviceinfo.odometer / 1000);
-                            deviceinfo.odometerflag = true;
-                        }
-                    }
-                    let _statusCode = "STATUS_LOCATION";
-                    if (_eventCode) {
-                        // 0=PowerOff, 1=Arrive, 2=SOS, 3=AntiTheft, 4=LowerSpeed?, 5=Overspeed, 6=Depart
-                        switch (_eventCode) {
-                            case '0':
-                                _statusCode = "STATUS_POWER_OFF";
-                                break;
-                            case '1':
-                                _statusCode = "STATUS_GEOBOUNDS_ENTER";
-                                break;
-                            case '2':
-                                _statusCode = "STATUS_PANIC_ON";
-                                break;
-                            case '3':
-                                _statusCode = "STATUS_INTRUSION_ON";
-                                break;
-                            case '4':
-                                _statusCode = "STATUS_LOCATION";
-                                break;
-                            case '5':
-                                _statusCode = "STATUS_MOTION_EXCESS_SPEED";
-                                break;
-                            case '6':
-                                _statusCode = "STATUS_GEOBOUNDS_EXIT";
-                                break;
-                            case '7':
-                                _statusCode = "STATUS_MOVEMENT";
-                                break;
-                            case '8':
-                                _statusCode = "STATUS_LOW_POWER";
-                                break;
-                        }
-                    }
-                    //deviceinfo.statuscode.length = 0;
-                    deviceinfo.acc = status.acc;
-                    //status.agps.length = 0;
-                    if (deviceinfo.gpsvalidity === 'V')
-                        deviceinfo.statuscode.push('INVALID_GPS');
-                    else if (_msgType.indexOf('BZ0') == 0)
-                        deviceinfo.statuscode.push('LBS');
-                    if (deviceinfo.vibration)
-                        deviceinfo.statuscode.push('VIBRATION');
-
-                    deviceinfo.status = status;
-                    d.push(deviceinfo);
-                    jsd.push({ raw: data, data: deviceinfo });
-                }
-
-            } catch (error) {
-                console.log(error);
-                continue;
-            }
-        }
-
-        return jsd;
-    }
-    async generateRaws() {
-        let deferred = Q.defer();
-        let count = await this.getRawCount() as string;
-        let page = 0;
-        let maxpage = 50000;
-        let range = Math.ceil(Number.parseInt(count) / maxpage);
-        try {
-            for (let index = 0; index < range; index++) {
-                page = index * maxpage;
-                let raw = await this.getRaws(page, maxpage) as Array<any>;
-                let jsraw = this.rawToJson(raw);
-                let arr = [];
-                for (let index = 0; index < jsraw.length; index++) {
-                    if (jsraw[index].data)
-                        arr.push(jsraw[index].data);
-                }
-                let res = await this.updateBulkDoc(arr, 'raws_gen') as Array<any>;
-                console.log(res.length);
-            }
-            deferred.resolve('GEN OK');
-        } catch (error) {
-            console.log(error);
-            deferred.reject(error);
-        }
-
-        return deferred.promise;
-    }
-    searchRawsGenByGPSTIMELATLON(arr) {
-        let deferred = Q.defer();
-        let db = this.create_db('raws_gen');
-        console.log('search range ' + arr.length);
-        console.log('search range ' + arr[0]);
-        db.view(this.__design_view, 'searchByGPSTIMELATLON', { keys: arr, include_docs: true }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                let arr = [];
-                for (let index = 0; index < res.rows.length; index++) {
-                    const element = res.rows[index].doc;
-                    arr.push(element);
-                }
-                // console.log(arr);
-                // throw new Error('TEST');
-                // @ts-ignore
-                deferred.resolve(arr);
-            }
-        })
-        return deferred.promise;
-    }
-    async fixWithRaws(ar) {
-        let deferred = Q.defer();
-        //let db=this.create_db('raws_gen');
-        // let count = await this.getRawGenCount() as string;
-        // let page = 0;
-        // let maxpage = 10000;
-        // let range = Math.ceil(Number.parseInt(count) / maxpage);
-        let fixarr = [];
-        // for (let index = 0; index < range; index++) {
-        //     page = index * maxpage;
-        // let jsraw = await this.getRawGen(page, maxpage) as Array<any>;
-        // console.log(jsraw.length);
-        // console.log(new Date(jsraw[500].gpstime).getTime());
-        // console.log(' VS ');
-        // console.log(new Date(ar[500].gpstime).getTime());          
-        // throw new Error('TESTING');
-        //         // @ts-ignore
-        let fixAcc = [];
-        let fixImei = [];
-        let searcharrimei = [];
-        let searcharracc = [];
-
-        for (let index = 0; index < ar.length; index++) {
-            try {
-                const element = ar[index];
-                if (!element.imei) {
-                    searcharrimei.push([moment(element.gpstime).valueOf(), Number.parseFloat(element.lat), Number.parseFloat(element.lon)]);
-                }
-                else if (!element.acc) {
-                    searcharracc.push([moment(element.gpstime).valueOf(), Number.parseFloat(element.lat), Number.parseFloat(element.lon)]);
-                }
-            } catch (error) {
-                console.log(error);
-                continue;
-            }
-
-        }
-        //let array = jsraw;
-        // for (let i = 0; i < jsraw.length; i++) {
-        //     const e = jsraw[i];
-        try {
-            if (searcharrimei.length) {
-                // searcharrimei.length=0;
-                // searcharrimei.push([1518430094000,17.99147,102.619992]);
-                // console.log(e);
-                // console.log(element); 
-                // console.log('IMEI');   
-                // if(new Date(e.gpstime).getTime() === new Date(element.gpstime).getTime() && e.lat === element.lat && e.lon === element.lon ){
-                //     ar[index].imei = e.imei;
-                //     //fixImei.push({fix:ar[index],data:JSON.stringify(e)});
-                //     fixarr.push(ar[index]);
-                // }
-                //console.log('BAD DOC '+e.data.imei+' '+e.data.gpstime+' ACC '+e.data.acc );                       
-                //throw new Error('TESTING');
-                //   console.log(searcharrimei);
-                console.log('search empty imei: ' + searcharrimei.length);
-                fixImei = await this.searchRawsGenByGPSTIMELATLON(searcharrimei) as Array<any>;
-                fixarr = fixarr.concat(fixImei);
-                searcharrimei.length = 0;
-                // @ts-ignore
-            } else if (searcharracc.length) {
-                console.log('search empty imei: ' + searcharracc.length);
-                fixAcc = await this.searchRawsGenByGPSTIMELATLON(searcharracc) as Array<any>;
-                fixarr = fixarr.concat(fixAcc);
-                searcharracc.length = 0;
-                // console.log(e);
-                // console.log(element);
-                // console.log('ACC');
-                // if(new Date(e.gpstime).getTime() === new Date(element.gpstime).getTime() && e.lat === element.lat && e.lon === element.lon){                            
-
-                //     ar[index].acc = e.acc;    
-                //     //fixAcc.push({fix:ar[index],data:JSON.stringify(e)});                    
-                //     fixarr.push(ar[index]);
-                // }
-                // console.log('BAD DOC '+e.data.imei+' '+e.data.gpstime +' ACC '+e.data.acc );
-
-                // @ts-ignore
-            }
-            // console.log('fixacc '+fixAcc.length);
-            // console.log(fixAcc);
-            // console.log('fiximei '+fixImei.length);
-            // console.log(fixImei);
-        } catch (error) {
-            console.log(error);
-        }
-
-
-        //}
-        // }
-        console.log('fixacc ' + fixAcc.length);
-        console.log(fixAcc);
-        console.log('fiximei ' + fixImei.length);
-        console.log(fixImei);
-        //throw new Error('TESTING');
-        // // @ts-ignore
-        //}
-        deferred.resolve(fixarr);
-        return deferred.promise;
-    }
-    async insertFromRawGen(y, m) {
-        let deferred = Q.defer();
-        let db = this.create_db('raws_gen');
-        try {
-            let count = await this.getCountRawGenByYEARMONTH(y, m) as number;
-            console.log('COUNT ' + count);
-            if (count > 0) {
-                let page = 0;
-                let maxpage = 10000;
-                let range = Math.ceil(count / maxpage);
-                let arr = [];
-                for (let index = 0; index < range; index++) {
-                    page = index * maxpage;
-                    arr = await this.getRawGenByYEARMONTH(y, m, page, maxpage) as any[];
-                    console.log('MANUAL INSERT BULK ' + arr.length);
-                    //console.log(arr[0]);
-                    let ar = await this.updateBulkDoc(arr, 'working_record');
-                }
-                deferred.resolve('OK');
-
-            }
-        } catch (error) {
-            console.log(error);
-        }
-
-        return deferred.promise;
-    }
-    getCountRawGenByYEARMONTH(y, m) {
-        let deferred = Q.defer();
-        let db = this.create_db('raws_gen');
-        db.view(this.__design_view, 'countByYEARMONTH', { key: [y, m] }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                let arr = [];
-                console.log(res.rows[0].value);
-                deferred.resolve(res.rows[0].value);
-            }
-        });
-        return deferred.promise;
-    }
-    getRawGenByYEARMONTH(y, m, page, maxpage) {
-        let deferred = Q.defer();
-        let db = this.create_db('raws_gen');
-        console.log('y%s, m%s , page%s , maxpage %s', y, m, page, maxpage);
-        db.view(this.__design_view, 'findByYEARMONTH', { key: [y, m], include_docs: true, limit: maxpage, skip: page }, (err, res) => {
-            if (err) {
-                console.log(err);
-                deferred.reject(err);
-            } else {
-                let arr = [];
-                //console.log('RES: ',res);
-                for (let index = 0; index < res.rows.length; index++) {
-                    const element = res.rows[index].doc;
-                    delete element._rev;
-                    arr.push(element);
-                }
-                deferred.resolve(arr);
-            }
-        });
-        return deferred.promise;
-    }
-    fixDB() {
-        let deferred = Q.defer();
-        let c_db = 'working_record';
-        this.getRecordCount(c_db).then(async res => {
-            let count = res as number;
-            console.log(count);
-            let page = 0;
-            let maxpage = 35000;
-            let range = Math.ceil(count / maxpage);
-            let total_fixed = 0;
-            try {
-                //let ar = [];
-                for (let index = 0; index < range; index++) {
-                    page = index * maxpage;
-                    console.log(`page: ${page}`);
-                    let ar = await this.getRecordList(c_db, page, maxpage) as any[];
-                    console.log(`ar :${ar.length}`);
-
-                    //console.log(arrw.length);
-                    // for (let index = 0; index < arrw.length; index++) {
-                    //     const e = arrw[index];
-                    //     ar.push(e);
-                    // }
-                    // if (ar.length) {
-                    //     ar = await this.fixWithRaws(ar) as Array<any>;
-                    //     // throw new Error('ERROR TESTING');
-                    //     // // @ts-ignore
-                    //     if (ar.length) {
-                    //         let res = await this.updateBulkDoc(ar, c_db) as Array<any>;
-                    //         total_fixed += res.length;
-                    //         ar.length = 0;
-                    //     };
-
-                    // }
-                    let need = [];
-                    // let test_id = '01f47d1c-d5e1-4482-9032-440d9479a8e3';
-                    //let l="2018-06-10T15:05:03".length;
-                    let found = 0;
-                    for (let index = 0; index < ar.length; index++) {
-                        // if((ar[index].gpstime+'').length>l){
-                        //     console.log('FOUND',ar[index]);
-                        // }
-                        // console.log('',ar[index].gpstime ,ar[index].servertime,ar[index].imei,ar[index]._id);
-                        // if ((ar[index]._id == '025c59d4-3d1d-48a4-86f0-8c9597a29a7b')) {
-                        //     console.log('FOUND', ar[index]);
-                        //    // process.exit();                            
-                        //     //throw new Error('FOUND ');
-
-                        // }                        
-                        // continue;
-                        // // // @ts-ignore
-                        if ((ar[index].gpstime + '').indexOf('+07:00') > -1) {
-                            found++;
-                            //console.log('REPLACING');
-                            ar[index].gpstime = (ar[index].gpstime + '').replace('+07:00', '');
-                            ar[index].servertime = (ar[index].servertime + '').replace('+07:00', '');
-                            need.push(ar[index]);
-                        }
-                        // if (ar[index]._id === test_id) {
-                        //     need.push(ar[index]);
-                        //     console.log("FOUND TEST ID ", test_id);
-                        // }
-                    }
-                    console.log("FOUND FOR REPLACING ", found);
-                    if (need.length) {
-                        let res = await this.updateBulkDoc(need, c_db) as Array<any>;
-                        total_fixed += res.length;
-                        //console.log(res);
-                        console.log(`${c_db} fixing ${total_fixed} records`);
-                        for (let index = 0; index < res.length; index++) {
-                            const element = res[index];
-                            if (!element.ok) {
-                                console.log(element);
-                                throw new Error('ERROR NOT OK ');
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                console.log(error);
-                deferred.reject(error);
-            }
-            c_db = 'parking_record';
-            this.getRecordCount(c_db).then(async res => {
-                let count = res as number;
-                let page = 0;
-                let maxpage = 10000;
-                let range = Math.ceil(count / maxpage);
-                let total_fixed = 0;
-                try {
-                    //let ar = [];
-                    for (let index = 0; index < range; index++) {
-                        page = index * maxpage;
-                        console.log(`page: ${page}`);
-                        let ar = await this.getRecordList(c_db, page, maxpage) as any[];
-                        //console.log(arrw.length);
-                        // for (let index = 0; index < arrw.length; index++) {
-                        //     const e = arrw[index];
-                        //     ar.push(e);
-                        // }
-                        // if (ar.length) {
-                        //     ar = await this.fixWithRaws(ar) as Array<any>;
-                        //     // throw new Error('ERROR TESTING');
-                        //     // // @ts-ignore
-                        //     if (ar.length) {
-                        //         let res = await this.updateBulkDoc(ar, c_db) as Array<any>;
-                        //         total_fixed += res.length;
-                        //         ar.length = 0;
-                        //     };
-
-                        // }
-                        let need = [];
-                        let found = 0;
-                        for (let index = 0; index < ar.length; index++) {
-
-                            if ((ar[index].gpstime + '').indexOf('+07:00') > -1) {
-                                found++;
-                                console.log('REPLACING');
-                                ar[index].gpstime = (ar[index].gpstime + '').replace('+07:00', '');
-                                ar[index].servertime = (ar[index].servertime + '').replace('+07:00', '');
-                                need.push(ar[index]);
-                            }
-                        }
-                        console.log("FOUND FOR REPLACING ", found);
-                        if (need.length) {
-                            let res = await this.updateBulkDoc(need, c_db) as Array<any>;
-                            total_fixed += res.length;
-                            console.log(res);
-                            console.log(`${c_db} fixing ${total_fixed} records`);
-                            for (let index = 0; index < res.length; index++) {
-                                const element = res[index];
-                                if (!element.ok) {
-                                    console.log(element);
-                                    throw new Error('ERROR NOT OK ');
-                                }
-
-                            }
-                        }
-                    }
-
-
-                } catch (error) {
-                    console.log(error);
-                    deferred.reject(error);
-                }
-            });
-            deferred.resolve(total_fixed);
-        });
-
-
-        return deferred.promise;
-    }
-    get_device_list_by_owner_ws(js) {
-        console.log('checking key');
-        let deferred = Q.defer();
-        console.log('checking key2');
-        // console.log(js);
-        let username = js.client.data.user.username;
-        console.log('check key 3');
-        this.findDeviceByUsername(username).then(res => {
-            js.client.data.deviceinfo = res;
-
-            //this.filterObject(js.client.data.deviceinfo);
-            console.log('device list');
-            console.log(res);
-            js.client.data.message = 'OK get devices';
-            deferred.resolve(js);
-        }).catch(err => {
-            js.client.data.message = err;
-            deferred.reject(js);
-        })
-        return deferred.promise;
-    }
-
-
-    get_device_list_ws(js) {
-        let deferred = Q.defer();
-        let username = js.client.username;
-        console.log('check key');
-        this.findDeviceByUsername(username).then(res => {
-            js.client.data.deviceinfo = res;
-            //this.filterObject(js.client.data.deviceinfo);
-            console.log('device list');
-            console.log(res);
-            js.client.data.message = 'OK get devices';
-            deferred.resolve(js);
-        }).catch(err => {
-            js.client.data.message = err;
-            deferred.reject(js);
-        })
-        return deferred.promise;
-    }
 
     filterObject(obj) {
         var need = ['gui', '_rev', 'gui', 'password', 'oldphone', 'system', 'parents', 'roles', 'isActive'];
@@ -3222,169 +1755,7 @@ class App {
         return obj;
     }
 
-    get_problem_record(imei, y, m, d) {
-        let deferred = Q.defer();
-        let db = this.create_db('alarm_record')
-        try {
-            //let imei = js.client.data.deviceinfo.imei;
-            db.view(this.__design_view, 'byIMEIGPSYEARMONTHDATE', {
-                key: [
-                    [Number.parseInt(y), Number.parseInt(m), Number.parseInt(d)], imei + ''
-                ],
-                descending: true,
-                include_docs: true
-            }, (err, res) => {
-                if (err) { console.log(err); deferred.reject(err); }
-                else {
-                    let arr = [];
-                    for (let index = 0; index < res.rows.length; index++) {
-                        const element = res.rows[index].doc;
-                        arr.push(element);
-                    }
-                    deferred.resolve(arr);
-                }
-            });
-        } catch (error) {
-            //js.client.data.message = err;
-            deferred.reject(error);
-        }
-        return deferred.promise;
-    }
-    get_last_working_status(imei, startitme, endtime, status) {
-        let deferred = Q.defer();
-        let db = this.create_db('working_record');
-        db.view(this.__design_view, 'byIMEIACCGPSTIME', {
-            descending: true,
-            limit: 1,
-            startkey: [imei, status, endtime],
-            endkey: [imei, status, startitme],
-            include_docs: true,
-        },
-            (err, res) => {
-                if (err) {
-                    console.log(err);
-                    deferred.reject(err);
-                } else {
-                    let arr = [];
-                    for (let index = 0; index < res.rows.length; index++) {
-                        const element = res.rows[index].doc;
-                        arr.push(element);
-                    }
-                    //console.log(res);
-                    deferred.resolve(arr);
-                }
-            });
-        return deferred.promise;
-    }
-    get_previous_day_working_status(imei, startitme, endtime) {
-        let deferred = Q.defer();
-        let db = this.create_db('working_record');
-        db.view(this.__design_view, 'byIMEIGPSTIME', {
-            descending: true,
-            limit: 1,
-            startkey: [imei, endtime],
-            endkey: [imei, startitme],
-            include_docs: true,
-        },
-            (err, res) => {
-                if (err) {
-                    console.log(err);
-                    deferred.reject(err);
-                } else {
-                    let arr = [];
-                    for (let index = 0; index < res.rows.length; index++) {
-                        const element = res.rows[index].doc;
-                        arr.push(element);
-                    }
-                    //console.log(res);
-                    deferred.resolve(arr);
-                }
-            });
-        return deferred.promise;
-    }
-    get_previous_day_parking_status(imei, startitme, endtime) {
-        let deferred = Q.defer();
-        let db = this.create_db('parking_record');
-        db.view(this.__design_view, 'byIMEIGPSTIME', {
-            descending: true,
-            limit: 1,
-            startkey: [imei, endtime],
-            endkey: [imei, startitme],
-            include_docs: true,
-        },
-            (err, res) => {
-                if (err) {
-                    console.log(err);
-                    deferred.reject(err);
-                } else {
-                    let arr = [];
-                    for (let index = 0; index < res.rows.length; index++) {
-                        const element = res.rows[index].doc;
-                        arr.push(element);
-                    }
-                    //console.log(res);
-                    deferred.resolve(arr);
-                }
-            });
-        return deferred.promise;
-    }
-    get_parking_record(imei, y, m, d) {
-        let deferred = Q.defer();
-        let db = this.create_db('parking_record')
-        try {
-            //let imei = js.client.data.deviceinfo.imei;
-            db.view(this.__design_view, 'byIMEIGPSYEARMONTHDATE', {
-                key: [
-                    [Number.parseInt(y), Number.parseInt(m), Number.parseInt(d)], imei + ''
-                ],
-                descending: true,
-                include_docs: true
-            }, (err, res) => {
-                if (err) { console.log(err); deferred.reject(err); }
-                else {
-                    let arr = [];
-                    for (let index = 0; index < res.rows.length; index++) {
-                        const element = res.rows[index].doc;
-                        arr.push(element);
-                    }
-                    deferred.resolve(arr);
-                }
-            });
-        } catch (error) {
-            //js.client.data.message = err;
-            deferred.reject(error);
-        }
-        return deferred.promise;
-    }
-
-    get_working_record(imei, y, m, d): Q.Promise<any> {
-        let deferred = Q.defer();
-        let db = this.create_db('working_record');
-        try {
-            //let imei = js.client.data.deviceinfo.imei;
-            db.view(this.__design_view, 'byIMEIGPSYEARMONTHDATE', {
-                key: [
-                    [Number.parseInt(y), Number.parseInt(m), Number.parseInt(d)], imei + ''
-                ],
-                descending: true,
-                include_docs: true
-            }, (err, res) => {
-                if (err) { console.log(err); deferred.reject(err); }
-                else {
-                    let arr = [];
-                    for (let index = 0; index < res.rows.length; index++) {
-                        const element = res.rows[index].doc;
-                        arr.push(element);
-                    }
-                    deferred.resolve(arr);
-                }
-            });
-        } catch (error) {
-            //js.client.data.message = err;
-            deferred.reject(error);
-        }
-        return deferred.promise;
-    }
+    
 
     make_payment_ws(js) {
         let deferred = Q.defer();
@@ -5336,7 +3707,7 @@ class App {
     search_username_ws(js): Q.Promise<any> {
         let deferred = Q.defer();
         let client = JSON.parse(JSON.stringify(js.client));
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         client.data.command = 'search-username';
         client.data.command2 = js.client.data.command;
         let ws_client = new WebSocket(this._usermanager_ws); // user-management
@@ -5383,7 +3754,7 @@ class App {
     getUserByLoginToken(js): Q.Promise<any> {
         let deferred = Q.defer();
         let client = JSON.parse(JSON.stringify(js.client));
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         client.data.command = 'find-user-by-logintoken';
         client.data.command2 = js.client.data.command;
         let ws_client = new WebSocket(this._usermanager_ws); // user-management
@@ -5429,7 +3800,7 @@ class App {
     getUserByGUI(js): Q.Promise<any> {
         let deferred = Q.defer();
         let client = JSON.parse(JSON.stringify(js.client));
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         client.data.command = 'find-user';
         client.data.command2 = js.client.data.command;
         let ws_client = new WebSocket(this._usermanager_ws); // user-management
@@ -5475,7 +3846,7 @@ class App {
     get_user_profile_ws(js) {
         let deferred = Q.defer();
         let client = JSON.parse(JSON.stringify(js.client));
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         client.data.command = 'get-profile';
         client.data.command2 = js.client.data.command;
         let ws_client = new WebSocket(this._usermanager_ws); // user-management
@@ -5522,7 +3893,7 @@ class App {
     findCurrentUserByGUI(js): Q.Promise<any> {
         let deferred = Q.defer();
         let client = JSON.parse(JSON.stringify(js.client));
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         client.data.command = 'get-user-info';
         client.data.command2 = js.client.data.command;
         let ws_client = new WebSocket(this._usermanager_ws); // user-management
@@ -5572,7 +3943,7 @@ class App {
         let client = JSON.parse(JSON.stringify(js.client));
         client.data.command = 'find-by-many-usernames';
         client.data.command2 = js.client.data.command;
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         let ws_client = new WebSocket('ws://nonav.net:8081/'); // ltcservice
         ws_client.binaryType = 'arraybuffer';
         let parent = this;
@@ -5615,7 +3986,7 @@ class App {
         let client = JSON.parse(JSON.stringify(js.client));
         client.data.command = 'find-by-username';
         client.data.command2 = js.client.data.command;
-        client.prefix = 'ice-maker';
+        client.prefix = 'delivery';
         let ws_client = new WebSocket(this._usermanager_ws); // user management
         ws_client.binaryType = 'arraybuffer';
         let parent = this;
@@ -5695,7 +4066,7 @@ class App {
         try {
             client.data.command2 = js.client.data.command;
             client.data.command = 'get-user-gui';
-            client.prefix = 'ice-maker';
+            client.prefix = 'delivery';
             client.auth = {};
             let ws_client = new WebSocket(this._usermanager_ws); // user-management
             ws_client.binaryType = 'arraybuffer';
@@ -5753,7 +4124,7 @@ class App {
         try {
             client.data.command = 'heart-beat';
             client.data.command2 = js.client.data.command;
-            client.prefix = 'ice-maker';
+            client.prefix = 'delivery';
             let ws_client = new WebSocket(this._usermanager_ws); // user-management
             ws_client.binaryType = 'arraybuffer';
             let parent = this;
@@ -5819,7 +4190,7 @@ class App {
         try {
             client.data.command = 'shake-hands';
             client.data.command2 = js.client.data.command;
-            client.prefix = 'ice-maker';
+            client.prefix = 'delivery';
             let ws_client = new WebSocket(this._usermanager_ws); // user-management
             ws_client.binaryType = 'arraybuffer';
             let parent = this;
@@ -5893,7 +4264,7 @@ class App {
         try {
             client.data.command = 'logout';
             client.data.command2 = js.client.data.command;
-            client.prefix = 'ice-maker';
+            client.prefix = 'delivery';
             let ws_client = new WebSocket(this._usermanager_ws); // user-management
             ws_client.binaryType = 'arraybuffer';
             let parent = this;
